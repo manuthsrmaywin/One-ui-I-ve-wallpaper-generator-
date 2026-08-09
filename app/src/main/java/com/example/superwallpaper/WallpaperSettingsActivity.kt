@@ -1,30 +1,26 @@
 package com.example.superwallpaper
 
+import android.content.Context
 import android.os.Bundle
-import android.preference.PreferenceActivity
-import android.preference.PreferenceFragment
+import androidx.appcompat.app.AppCompatActivity
+import androidx.preference.PreferenceFragmentCompat
 
-class WallpaperSettingsActivity : PreferenceActivity() {
+class WallpaperSettingsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Load the preferences fragment safely
-        fragmentManager.beginTransaction()
+
+        supportFragmentManager
+            .beginTransaction()
             .replace(android.R.id.content, SettingsFragment())
             .commit()
     }
 
-    class SettingsFragment : PreferenceFragment() {
-        override fun onCreate(savedInstanceState: Bundle?) {
-            super.onCreate(savedInstanceState)
-            
-            // Set shared preferences name to match the service
+    class SettingsFragment : PreferenceFragmentCompat() {
+        override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             preferenceManager.sharedPreferencesName = "wallpaper_prefs"
-            preferenceManager.sharedPreferencesMode = MODE_PRIVATE
-            
-            // Load controls from XML
-            addPreferencesFromResource(R.xml.wallpaper_preferences)
+            preferenceManager.sharedPreferencesMode = Context.MODE_PRIVATE
+            setPreferencesFromResource(R.xml.wallpaper_preferences, rootKey)
         }
     }
 }
