@@ -21,6 +21,21 @@ import javax.microedition.khronos.opengles.GL10
 
 class SuperWallpaperService : WallpaperService() {
 
+    // --- Configuration Preset Data Model ---
+    enum class ShapeType { WAVE_MESH, VOLUMETRIC_ORB, TORUS_KNOT, PARTICLE_CLOUD }
+
+    data class WallpaperConfig(
+        val shapeType: ShapeType = ShapeType.VOLUMETRIC_ORB,
+        val primaryColorDark: FloatArray = floatArrayOf(0.1f, 0.45f, 0.95f, 1.0f),
+        val secondaryColorDark: FloatArray = floatArrayOf(0.6f, 0.1f, 0.85f, 1.0f),
+        val primaryColorLight: FloatArray = floatArrayOf(0.2f, 0.6f, 1.0f, 1.0f),
+        val secondaryColorLight: FloatArray = floatArrayOf(0.9f, 0.4f, 0.7f, 1.0f),
+        val animationSpeed: Float = 0.015f,
+        val fluidityDamping: Float = 0.08f,
+        val volumetricDensity: Float = 1.2f,
+        val waveAmplitude: Float = 0.35f
+    )
+
     override fun onCreateEngine(): Engine {
         return SuperWallpaperEngine()
     }
@@ -30,93 +45,110 @@ class SuperWallpaperService : WallpaperService() {
         private var glSurfaceView: WallpaperGLSurfaceView? = null
         private var keyguardManager: KeyguardManager? = null
 
+        // System & Theme States
         private var isLocked = true
         private var isDarkMode = true
         
-        // Page swipe & transition tracking
+        // Active Configuration
+        var config = WallpaperConfig()
+
+        // Interpolated Motion Values
         private var xOffset = 0.5f
         private var targetOffset = 0.5f
-        private var targetZoom = 6.0f
-        private var currentZoom = 6.0f
+        private var targetZoom = 5.0f
+        private var currentZoom = 5.0f
         
-        // Touch interaction
         private var touchX = -1.0f
         private var touchY = -1.0f
         private var touchTime = 0.0f
+        private var time = 0.0f
 
-        // Matrix transformations
+        // Matrices
         private val projectionMatrix = FloatArray(16)
         private val viewMatrix = FloatArray(16)
         private val mvpMatrix = FloatArray(16)
         private val rotationMatrix = FloatArray(16)
 
-        private var time = 0.0f
         private var program = 0
-
-        // Geometry buffers for mesh grid
-        private val gridCols = 40
-        private val gridRows = 40
+        private val gridCols = 50
+        private val gridRows = 50
         private var indexCount = 0
 
         private lateinit var vertexBuffer: FloatBuffer
         private lateinit var indexBuffer: ShortBuffer
 
-        // Shaders handling procedural wave deformation & lighting
+        // Advanced Shader: Handles dynamic shape deformation, wave displacement, and volumetric lighting
         private val vertexShaderCode = """
             uniform mat4 uMVPMatrix;
             uniform float uTime;
             uniform float uXOffset;
+            uniform int uShapeType;
+            uniform float uAmplitude;
+            
             attribute vec3 aPosition;
             varying vec3 vPosition;
-            varying float vWave;
+            varying float vDisplacement;
 
             void main() {
                 vec3 pos = aPosition;
+                float disp = 0.0;
                 
-                // Calculate fluid wave deformation directly in vertex shader
-                float wave1 = sin(pos.x * 1.5 + uTime * 1.2 + uXOffset * 3.0) * 0.4;
-                float wave2 = cos(pos.y * 1.8 + uTime * 0.9) * 0.3;
-                float wave3 = sin((pos.x + pos.y) * 1.0 + uTime * 1.5) * 0.2;
-                
-                pos.z += wave1 + wave2 + wave3;
+                if (uShapeType == 0) { 
+                    // WAVE_MESH
+                    disp = sin(pos.x * 2.0 + uTime * 1.5 + uXOffset * 4.0) * uAmplitude +
+                           cos(pos.y * 2.0 + uTime * 1.0) * (uAmplitude * 0.75);
+                    pos.z += disp;
+                } else if (uShapeType == 1 || uShapeType == 2) { 
+                    // VOLUMETRIC_ORB / TORUS_KNOT Morphing
+                    float angle = atan(pos.y, pos.x);
+                    float dist = length(pos.xy);
+                    disp = sin(dist * 4.0 - uTime * 2.0) * uAmplitude;
+                    pos.z += disp;
+                }
                 
                 vPosition = pos;
-                vWave = pos.z;
-                
+                vDisplacement = disp;
                 gl_Position = uMVPMatrix * vec4(pos, 1.0);
             }
         """.trimIndent()
 
         private val fragmentShaderCode = """
             precision mediump float;
-            uniform vec4 uBaseColor;
-            uniform vec4 uWaveColor;
+            
+            uniform vec4 uPrimaryColor;
+            uniform vec4 uSecondaryColor;
             uniform float uTime;
+            uniform float uDensity;
             uniform vec2 uTouchPos;
             uniform float uTouchTime;
+            uniform int uShapeType;
             
             varying vec3 vPosition;
-            varying float vWave;
+            varying float vDisplacement;
 
             void main() {
-                // Blend color based on wave height
-                float mixFactor = smoothstep(-0.5, 0.6, vWave);
-                vec4 color = mix(uBaseColor, uWaveColor, mixFactor);
+                vec4 color = mix(uPrimaryColor, uSecondaryColor, vDisplacement + 0.5);
                 
-                // Add soft specular sheen along wave peaks
-                float highlight = pow(mixFactor, 3.0) * 0.35;
-                color.rgb += vec3(highlight);
-
-                // Touch ripple effect calculation
+                // Volumetric Glow / Raymarched feel calculation
+                if (uShapeType == 1) {
+                    float radialGlow = 1.0 - smoothstep(0.0, 2.5 * uDensity, length(vPosition.xy));
+                    color.rgb += uSecondaryColor.rgb * radialGlow * 0.6;
+                }
+                
+                // Touch Ripple Effect
                 if (uTouchTime > 0.0) {
                     float dist = distance(vPosition.xy, uTouchPos);
-                    float rippleRadius = uTouchTime * 3.0;
-                    float rippleWidth = 0.4;
+                    float rippleRadius = uTouchTime * 3.5;
+                    float rippleWidth = 0.35;
                     float ripple = smoothstep(rippleRadius - rippleWidth, rippleRadius, dist) - 
                                    smoothstep(rippleRadius, rippleRadius + rippleWidth, dist);
-                    float fade = max(0.0, 1.0 - (uTouchTime * 0.8));
-                    color.rgb += vec3(0.2, 0.5, 0.9) * ripple * fade;
+                    float fade = max(0.0, 1.0 - (uTouchTime * 0.7));
+                    color.rgb += vec3(0.3, 0.7, 1.0) * ripple * fade;
                 }
+
+                // Specular sheen along movement edges
+                float sheen = pow(clamp(vDisplacement + 0.4, 0.0, 1.0), 3.0) * 0.4;
+                color.rgb += vec3(sheen);
 
                 gl_FragColor = color;
             }
@@ -127,11 +159,11 @@ class SuperWallpaperService : WallpaperService() {
                 when (intent?.action) {
                     Intent.ACTION_USER_PRESENT -> {
                         isLocked = false
-                        targetZoom = 4.5f
+                        targetZoom = 4.0f
                     }
                     Intent.ACTION_SCREEN_OFF -> {
                         isLocked = true
-                        targetZoom = 6.0f
+                        targetZoom = 5.5f
                     }
                 }
             }
@@ -142,11 +174,10 @@ class SuperWallpaperService : WallpaperService() {
             keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
 
             isLocked = keyguardManager?.isKeyguardLocked ?: true
-            targetZoom = if (isLocked) 6.0f else 4.5f
+            targetZoom = if (isLocked) 5.5f else 4.0f
             currentZoom = targetZoom
 
-            val nightModeFlags = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
-            isDarkMode = nightModeFlags == Configuration.UI_MODE_NIGHT_YES
+            updateThemeState()
 
             val filter = IntentFilter().apply {
                 addAction(Intent.ACTION_USER_PRESENT)
@@ -163,13 +194,17 @@ class SuperWallpaperService : WallpaperService() {
             }
         }
 
-        // Programmatically generates a 3D plane grid mesh
+        private fun updateThemeState() {
+            val nightModeFlags = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+            isDarkMode = nightModeFlags == Configuration.UI_MODE_NIGHT_YES
+        }
+
         private fun generateMeshGrid() {
             val vertices = ArrayList<Float>()
             val indices = ArrayList<Short>()
 
-            val width = 6.0f
-            val height = 6.0f
+            val width = 7.0f
+            val height = 7.0f
 
             for (r in 0..gridRows) {
                 val y = (r.toFloat() / gridRows) * height - (height / 2.0f)
@@ -215,11 +250,10 @@ class SuperWallpaperService : WallpaperService() {
         override fun onTouchEvent(event: MotionEvent?) {
             super.onTouchEvent(event)
             if (event?.action == MotionEvent.ACTION_DOWN) {
-                // Map screen tap to normalized 3D mesh space
                 val viewWidth = glSurfaceView?.width ?: 1
                 val viewHeight = glSurfaceView?.height ?: 1
-                touchX = ((event.x / viewWidth) - 0.5f) * 6.0f
-                touchY = -((event.y / viewHeight) - 0.5f) * 6.0f
+                touchX = ((event.x / viewWidth) - 0.5f) * 7.0f
+                touchY = -((event.y / viewHeight) - 0.5f) * 7.0f
                 touchTime = 0.01f
             }
         }
@@ -242,8 +276,9 @@ class SuperWallpaperService : WallpaperService() {
         override fun onVisibilityChanged(visible: Boolean) {
             super.onVisibilityChanged(visible)
             if (visible) {
+                updateThemeState()
                 isLocked = keyguardManager?.isKeyguardLocked ?: true
-                targetZoom = if (isLocked) 6.0f else 4.5f
+                targetZoom = if (isLocked) 5.5f else 4.0f
                 glSurfaceView?.onResume()
             } else {
                 glSurfaceView?.onPause()
@@ -277,27 +312,26 @@ class SuperWallpaperService : WallpaperService() {
         }
 
         override fun onDrawFrame(gl: GL10?) {
-            time += 0.015f
+            time += config.animationSpeed
+
             if (touchTime > 0.0f) {
                 touchTime += 0.02f
-                if (touchTime > 1.5f) touchTime = 0.0f
+                if (touchTime > 1.8f) touchTime = 0.0f
             }
 
-            // Smooth interpolation for unlock zoom & page swipe
-            currentZoom += (targetZoom - currentZoom) * 0.06f
-            xOffset += (targetOffset - xOffset) * 0.1f
+            // Smooth interpolation using configurable damping
+            currentZoom += (targetZoom - currentZoom) * config.fluidityDamping
+            xOffset += (targetOffset - xOffset) * config.fluidityDamping
 
             setClearColorForTheme()
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
 
             GLES20.glUseProgram(program)
 
-            // Tilt the camera angled down for a dynamic perspective
-            Matrix.setLookAtM(viewMatrix, 0, 0f, -2.5f, currentZoom, 0f, 0f, 0f, 0f, 1.0f, 0.0f)
+            Matrix.setLookAtM(viewMatrix, 0, 0f, -2.0f, currentZoom, 0f, 0f, 0f, 0f, 1.0f, 0.0f)
             Matrix.multiplyMM(mvpMatrix, 0, projectionMatrix, 0, viewMatrix, 0)
 
-            // Apply horizontal rotation when swiping home pages
-            val swipeAngle = (xOffset - 0.5f) * 25.0f
+            val swipeAngle = (xOffset - 0.5f) * 30.0f
             Matrix.setRotateM(rotationMatrix, 0, swipeAngle, 0.0f, 1.0f, 0.0f)
             Matrix.multiplyMM(mvpMatrix, 0, mvpMatrix, 0, rotationMatrix, 0)
 
@@ -306,30 +340,31 @@ class SuperWallpaperService : WallpaperService() {
                 GLES20.glVertexAttribPointer(it, 3, GLES20.GL_FLOAT, false, 12, vertexBuffer)
             }
 
-            // Uniforms setup
+            // Pass Configuration Values to Shader Uniforms
             GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uTime"), time)
             GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uXOffset"), xOffset)
+            GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uShapeType"), config.shapeType.ordinal)
+            GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uAmplitude"), config.waveAmplitude)
+            GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uDensity"), config.volumetricDensity)
             GLES20.glUniform2f(GLES20.glGetUniformLocation(program, "uTouchPos"), touchX, touchY)
             GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uTouchTime"), touchTime)
             GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program, "uMVPMatrix"), 1, false, mvpMatrix, 0)
 
-            // Correct light/dark color assignments
-            if (isDarkMode) {
-                GLES20.glUniform4f(GLES20.glGetUniformLocation(program, "uBaseColor"), 0.05f, 0.08f, 0.18f, 1.0f)
-                GLES20.glUniform4f(GLES20.glGetUniformLocation(program, "uWaveColor"), 0.15f, 0.45f, 0.95f, 1.0f)
-            } else {
-                GLES20.glUniform4f(GLES20.glGetUniformLocation(program, "uBaseColor"), 0.85f, 0.92f, 1.0f, 1.0f)
-                GLES20.glUniform4f(GLES20.glGetUniformLocation(program, "uWaveColor"), 0.2f, 0.55f, 0.9f, 1.0f)
-            }
+            // Dynamic Palette Swapping based on Light/Dark System Theme
+            val primary = if (isDarkMode) config.primaryColorDark else config.primaryColorLight
+            val secondary = if (isDarkMode) config.secondaryColorDark else config.secondaryColorLight
+
+            GLES20.glUniform4fv(GLES20.glGetUniformLocation(program, "uPrimaryColor"), 1, primary, 0)
+            GLES20.glUniform4fv(GLES20.glGetUniformLocation(program, "uSecondaryColor"), 1, secondary, 0)
 
             GLES20.glDrawElements(GLES20.GL_TRIANGLES, indexCount, GLES20.GL_UNSIGNED_SHORT, indexBuffer)
         }
 
         private fun setClearColorForTheme() {
             if (isDarkMode) {
-                GLES20.glClearColor(0.04f, 0.05f, 0.1f, 1.0f) // Deep dark canvas
+                GLES20.glClearColor(0.03f, 0.04f, 0.08f, 1.0f)
             } else {
-                GLES20.glClearColor(0.92f, 0.95f, 0.98f, 1.0f) // Clean light canvas
+                GLES20.glClearColor(0.92f, 0.95f, 0.98f, 1.0f)
             }
         }
 
