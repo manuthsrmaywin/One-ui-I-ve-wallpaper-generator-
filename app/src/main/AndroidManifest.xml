@@ -23,12 +23,12 @@
                 android:resource="@xml/wallpaper" />
         </service>
 
-        <!-- Wallpaper Settings Activity -->
+        <!-- Wallpaper Settings Activity with stable light/dark device theme -->
         <activity
             android:name=".WallpaperSettingsActivity"
             android:label="Wallpaper Settings"
             android:exported="true"
-            android:theme="@android:style/Theme.DeviceDefault.Settings" />
+            android:theme="@android:style/Theme.DeviceDefault.DayNight" />
 
     </application>
 
