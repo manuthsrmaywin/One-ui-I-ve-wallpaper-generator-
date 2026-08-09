@@ -1,88 +1,146 @@
 package com.example.superwallpaper
 
-import android.app.Activity
 import android.content.Context
-import android.os.Bundle
-import android.view.View
-import android.widget.*
+import android.content.SharedPreferences
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.os.Handler
+import android.os.Looper
+import android.service.wallpaper.WallpaperService
+import android.view.SurfaceHolder
+import kotlin.math.cos
+import kotlin.math.sin
 
-class WallpaperSettingsActivity : Activity() {
+class SuperWallpaperService : WallpaperService() {
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    override fun onCreateEngine(): Engine {
+        return WallpaperEngine()
+    }
 
-        val prefs = getSharedPreferences("wallpaper_prefs", Context.MODE_PRIVATE)
-        val editor = prefs.edit()
-
-        // Create the main layout
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(64, 64, 64, 64)
+    private inner class WallpaperEngine : Engine(), SharedPreferences.OnSharedPreferenceChangeListener {
+        
+        private val prefs = getSharedPreferences("wallpaper_prefs", Context.MODE_PRIVATE)
+        private val paint = Paint().apply {
+            color = Color.parseColor("#00E5FF") // Cyan glow
+            isAntiAlias = true
+            strokeWidth = 4f
+            strokeCap = Paint.Cap.ROUND
         }
 
-        // Title
-        layout.addView(TextView(this).apply {
-            text = "Super Wallpaper Settings"
-            textSize = 24f
-            setPadding(0, 0, 0, 48)
-        })
+        private var shapeType = 1
+        private var waveAmplitude = 0.35f
+        private var animationSpeed = 0.015f
+        private var phase = 0f
 
-        // 1. Shape Type Dropdown (Spinner)
-        layout.addView(TextView(this).apply { 
-            text = "Shape Type"
-            textSize = 16f
-            setPadding(0, 24, 0, 8) 
-        })
-        val shapeSpinner = Spinner(this)
-        val shapes = arrayOf("Wave Mesh", "Volumetric Orb", "Torus Knot", "Particle Cloud")
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, shapes)
-        shapeSpinner.adapter = adapter
-        shapeSpinner.setSelection(prefs.getInt("pref_shape_type", 1)) // Default to Volumetric Orb
-        shapeSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                editor.putInt("pref_shape_type", position).apply()
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        private val handler = Handler(Looper.getMainLooper())
+        private val drawRunnable = Runnable { drawFrame() }
+        private var isVisible = false
+
+        override fun onCreate(surfaceHolder: SurfaceHolder) {
+            super.onCreate(surfaceHolder)
+            prefs.registerOnSharedPreferenceChangeListener(this)
+            updateSettings()
         }
-        layout.addView(shapeSpinner)
 
-        // 2. Wave Amplitude Slider
-        layout.addView(TextView(this).apply { 
-            text = "Wave Amplitude (Height)"
-            textSize = 16f
-            setPadding(0, 48, 0, 8) 
-        })
-        val amplitudeBar = SeekBar(this).apply { max = 100 }
-        // Convert stored float (0.0 - 1.0) to integer (0 - 100) for the slider
-        amplitudeBar.progress = (prefs.getFloat("pref_wave_amplitude", 0.35f) * 100).toInt()
-        amplitudeBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                editor.putFloat("pref_wave_amplitude", progress / 100f).apply()
+        override fun onDestroy() {
+            super.onDestroy()
+            prefs.unregisterOnSharedPreferenceChangeListener(this)
+            handler.removeCallbacks(drawRunnable)
+        }
+
+        override fun onVisibilityChanged(visible: Boolean) {
+            isVisible = visible
+            if (visible) {
+                drawFrame()
+            } else {
+                handler.removeCallbacks(drawRunnable)
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-        layout.addView(amplitudeBar)
+        }
 
-        // 3. Animation Speed Slider
-        layout.addView(TextView(this).apply { 
-            text = "Animation Speed"
-            textSize = 16f
-            setPadding(0, 48, 0, 8) 
-        })
-        val speedBar = SeekBar(this).apply { max = 100 }
-        // Convert stored float (0.0 - 0.1) to integer (0 - 100) for the slider
-        speedBar.progress = (prefs.getFloat("pref_animation_speed", 0.015f) * 1000).toInt()
-        speedBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                editor.putFloat("pref_animation_speed", progress / 1000f).apply()
+        override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
+            updateSettings()
+        }
+
+        private fun updateSettings() {
+            shapeType = prefs.getInt("pref_shape_type", 1)
+            waveAmplitude = prefs.getFloat("pref_wave_amplitude", 0.35f)
+            animationSpeed = prefs.getFloat("pref_animation_speed", 0.015f)
+        }
+
+        private fun drawFrame() {
+            val holder = surfaceHolder
+            var canvas: Canvas? = null
+            try {
+                canvas = holder.lockCanvas()
+                if (canvas != null) {
+                    drawShapes(canvas)
+                }
+            } finally {
+                if (canvas != null) {
+                    holder.unlockCanvasAndPost(canvas)
+                }
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-        layout.addView(speedBar)
 
-        // Apply the layout to the screen
-        setContentView(layout)
+            phase += animationSpeed
+            if (isVisible) handler.postDelayed(drawRunnable, 16) // Runs at ~60 FPS
+        }
+
+        private fun drawShapes(canvas: Canvas) {
+            canvas.drawColor(Color.parseColor("#0A0A0A")) // Deep dark background
+
+            val cx = canvas.width / 2f
+            val cy = canvas.height / 2f
+            val baseRadius = canvas.width / 3f
+            val amp = waveAmplitude * 400f // Scale amplitude slider to screen pixels
+
+            when (shapeType) {
+                0 -> { // Wave Mesh
+                    paint.style = Paint.Style.STROKE
+                    for (i in -6..6) {
+                        val yOffset = cy + (i * 60)
+                        var lastX = 0f
+                        var lastY = yOffset + sin(phase + (i * 0.5f)) * amp
+                        for (x in 0..canvas.width step 30) {
+                            val y = yOffset + sin(phase + (x * 0.01f) + (i * 0.5f)) * amp
+                            canvas.drawLine(lastX, lastY, x.toFloat(), y, paint)
+                            lastX = x.toFloat()
+                            lastY = y
+                        }
+                    }
+                }
+                1 -> { // Volumetric Orb
+                    paint.style = Paint.Style.STROKE
+                    for (i in 1..20) {
+                        val radius = (baseRadius / 20) * i
+                        val pulse = sin(phase + i * 0.3f) * amp
+                        canvas.drawCircle(cx, cy, radius + pulse, paint)
+                    }
+                }
+                2 -> { // Torus Knot (Lissajous Curve)
+                    paint.style = Paint.Style.STROKE
+                    var lastX = cx + sin(phase) * (baseRadius + amp)
+                    var lastY = cy + cos(phase) * (baseRadius + amp)
+                    for (i in 1..150) {
+                        val t = phase + i * 0.05f
+                        val x = cx + sin(3 * t) * (baseRadius + amp * sin(t))
+                        val y = cy + sin(2 * t) * (baseRadius + amp * cos(t))
+                        canvas.drawLine(lastX, lastY, x, y, paint)
+                        lastX = x
+                        lastY = y
+                    }
+                }
+                3 -> { // Particle Cloud
+                    paint.style = Paint.Style.FILL
+                    for (i in 0..100) {
+                        val t = phase * (1f + (i % 5) * 0.5f) + i
+                        val radiusFactor = baseRadius + amp * (i % 4)
+                        val px = cx + cos(t) * radiusFactor * cos(i.toFloat())
+                        val py = cy + sin(t) * radiusFactor * sin(i.toFloat())
+                        canvas.drawCircle(px, py, 6f, paint)
+                    }
+                }
+            }
+        }
     }
 }
