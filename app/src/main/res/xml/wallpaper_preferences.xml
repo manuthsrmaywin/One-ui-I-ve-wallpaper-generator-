@@ -5,8 +5,8 @@
         android:key="pref_shape_type"
         android:title="Shape Type"
         android:summary="Select 3D geometry shape"
-        android:entries="@android:array/im_mode_texts"
-        android:entryValues="@android:array/im_mode_texts"
-        android:defaultValue="0" />
+        android:entries="@array/shape_names"
+        android:entryValues="@array/shape_values"
+        android:defaultValue="1" />
 
 </PreferenceScreen>
