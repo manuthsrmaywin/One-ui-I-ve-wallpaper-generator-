@@ -5,8 +5,8 @@
         android:key="pref_shape_type"
         android:title="Shape Type"
         android:summary="Select 3D geometry shape"
-        android:entries="Wave Mesh,Volumetric Orb,Torus Knot,Particle Cloud"
-        android:entryValues="0,1,2,3"
+        android:entries="@array/shape_names"
+        android:entryValues="@array/shape_values"
         android:defaultValue="1" />
 
 </PreferenceScreen>
