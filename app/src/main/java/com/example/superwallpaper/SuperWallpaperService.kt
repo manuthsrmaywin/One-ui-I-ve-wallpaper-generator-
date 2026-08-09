@@ -21,7 +21,6 @@ import javax.microedition.khronos.opengles.GL10
 
 class SuperWallpaperService : WallpaperService() {
 
-    // --- Configuration Preset Data Model ---
     enum class ShapeType { WAVE_MESH, VOLUMETRIC_ORB, TORUS_KNOT, PARTICLE_CLOUD }
 
     data class WallpaperConfig(
@@ -45,14 +44,11 @@ class SuperWallpaperService : WallpaperService() {
         private var glSurfaceView: WallpaperGLSurfaceView? = null
         private var keyguardManager: KeyguardManager? = null
 
-        // System & Theme States
         private var isLocked = true
         private var isDarkMode = true
         
-        // Active Configuration
         var config = WallpaperConfig()
 
-        // Interpolated Motion Values
         private var xOffset = 0.5f
         private var targetOffset = 0.5f
         private var targetZoom = 5.0f
@@ -63,7 +59,6 @@ class SuperWallpaperService : WallpaperService() {
         private var touchTime = 0.0f
         private var time = 0.0f
 
-        // Matrices
         private val projectionMatrix = FloatArray(16)
         private val viewMatrix = FloatArray(16)
         private val mvpMatrix = FloatArray(16)
@@ -77,7 +72,6 @@ class SuperWallpaperService : WallpaperService() {
         private lateinit var vertexBuffer: FloatBuffer
         private lateinit var indexBuffer: ShortBuffer
 
-        // Advanced Shader: Handles dynamic shape deformation, wave displacement, and volumetric lighting
         private val vertexShaderCode = """
             uniform mat4 uMVPMatrix;
             uniform float uTime;
@@ -94,12 +88,10 @@ class SuperWallpaperService : WallpaperService() {
                 float disp = 0.0;
                 
                 if (uShapeType == 0) { 
-                    // WAVE_MESH
                     disp = sin(pos.x * 2.0 + uTime * 1.5 + uXOffset * 4.0) * uAmplitude +
                            cos(pos.y * 2.0 + uTime * 1.0) * (uAmplitude * 0.75);
                     pos.z += disp;
                 } else if (uShapeType == 1 || uShapeType == 2) { 
-                    // VOLUMETRIC_ORB / TORUS_KNOT Morphing
                     float angle = atan(pos.y, pos.x);
                     float dist = length(pos.xy);
                     disp = sin(dist * 4.0 - uTime * 2.0) * uAmplitude;
@@ -129,13 +121,11 @@ class SuperWallpaperService : WallpaperService() {
             void main() {
                 vec4 color = mix(uPrimaryColor, uSecondaryColor, vDisplacement + 0.5);
                 
-                // Volumetric Glow / Raymarched feel calculation
                 if (uShapeType == 1) {
                     float radialGlow = 1.0 - smoothstep(0.0, 2.5 * uDensity, length(vPosition.xy));
                     color.rgb += uSecondaryColor.rgb * radialGlow * 0.6;
                 }
                 
-                // Touch Ripple Effect
                 if (uTouchTime > 0.0) {
                     float dist = distance(vPosition.xy, uTouchPos);
                     float rippleRadius = uTouchTime * 3.5;
@@ -146,7 +136,6 @@ class SuperWallpaperService : WallpaperService() {
                     color.rgb += vec3(0.3, 0.7, 1.0) * ripple * fade;
                 }
 
-                // Specular sheen along movement edges
                 float sheen = pow(clamp(vDisplacement + 0.4, 0.0, 1.0), 3.0) * 0.4;
                 color.rgb += vec3(sheen);
 
@@ -302,13 +291,23 @@ class SuperWallpaperService : WallpaperService() {
                 GLES20.glAttachShader(it, vShader)
                 GLES20.glAttachShader(it, fShader)
                 GLES20.glLinkProgram(it)
+
+                val linkStatus = IntArray(1)
+                GLES20.glGetProgramiv(it, GLES20.GL_LINK_STATUS, linkStatus, 0)
+                if (linkStatus[0] == 0) {
+                    val info = GLES20.glGetProgramInfoLog(it)
+                    GLES20.glDeleteProgram(it)
+                    throw RuntimeException("Program linking failed: $info")
+                }
             }
         }
 
         override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-            GLES20.glViewport(0, 0, width, height)
-            val ratio: Float = width.toFloat() / height.toFloat()
-            Matrix.frustumM(projectionMatrix, 0, -ratio, ratio, -1f, 1f, 1f, 20f)
+            val w = if (width <= 0) 1080 else width
+            val h = if (height <= 0) 2400 else height
+            GLES20.glViewport(0, 0, w, h)
+            val ratio: Float = w.toFloat() / h.toFloat()
+            Matrix.frustumM(projectionMatrix, 0, -ratio, ratio, -1f, 1f, 1f, 50f)
         }
 
         override fun onDrawFrame(gl: GL10?) {
@@ -319,11 +318,11 @@ class SuperWallpaperService : WallpaperService() {
                 if (touchTime > 1.8f) touchTime = 0.0f
             }
 
-            // Smooth interpolation using configurable damping
             currentZoom += (targetZoom - currentZoom) * config.fluidityDamping
             xOffset += (targetOffset - xOffset) * config.fluidityDamping
 
             setClearColorForTheme()
+            GLES20.glDepthMask(true)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
 
             GLES20.glUseProgram(program)
@@ -335,12 +334,12 @@ class SuperWallpaperService : WallpaperService() {
             Matrix.setRotateM(rotationMatrix, 0, swipeAngle, 0.0f, 1.0f, 0.0f)
             Matrix.multiplyMM(mvpMatrix, 0, mvpMatrix, 0, rotationMatrix, 0)
 
-            GLES20.glGetAttribLocation(program, "aPosition").also {
-                GLES20.glEnableVertexAttribArray(it)
-                GLES20.glVertexAttribPointer(it, 3, GLES20.GL_FLOAT, false, 12, vertexBuffer)
+            val posHandle = GLES20.glGetAttribLocation(program, "aPosition")
+            if (posHandle != -1) {
+                GLES20.glEnableVertexAttribArray(posHandle)
+                GLES20.glVertexAttribPointer(posHandle, 3, GLES20.GL_FLOAT, false, 12, vertexBuffer)
             }
 
-            // Pass Configuration Values to Shader Uniforms
             GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uTime"), time)
             GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uXOffset"), xOffset)
             GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uShapeType"), config.shapeType.ordinal)
@@ -350,7 +349,6 @@ class SuperWallpaperService : WallpaperService() {
             GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uTouchTime"), touchTime)
             GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program, "uMVPMatrix"), 1, false, mvpMatrix, 0)
 
-            // Dynamic Palette Swapping based on Light/Dark System Theme
             val primary = if (isDarkMode) config.primaryColorDark else config.primaryColorLight
             val secondary = if (isDarkMode) config.secondaryColorDark else config.secondaryColorLight
 
@@ -358,6 +356,10 @@ class SuperWallpaperService : WallpaperService() {
             GLES20.glUniform4fv(GLES20.glGetUniformLocation(program, "uSecondaryColor"), 1, secondary, 0)
 
             GLES20.glDrawElements(GLES20.GL_TRIANGLES, indexCount, GLES20.GL_UNSIGNED_SHORT, indexBuffer)
+
+            if (posHandle != -1) {
+                GLES20.glDisableVertexAttribArray(posHandle)
+            }
         }
 
         private fun setClearColorForTheme() {
@@ -369,10 +371,18 @@ class SuperWallpaperService : WallpaperService() {
         }
 
         private fun loadShader(type: Int, shaderCode: String): Int {
-            return GLES20.glCreateShader(type).also { shader ->
-                GLES20.glShaderSource(shader, shaderCode)
-                GLES20.glCompileShader(shader)
+            val shader = GLES20.glCreateShader(type)
+            GLES20.glShaderSource(shader, shaderCode)
+            GLES20.glCompileShader(shader)
+            
+            val compiled = IntArray(1)
+            GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compiled, 0)
+            if (compiled[0] == 0) {
+                val infoLog = GLES20.glGetShaderInfoLog(shader)
+                GLES20.glDeleteShader(shader)
+                throw RuntimeException("Shader compilation failed ($type): $infoLog")
             }
+            return shader
         }
 
         inner class WallpaperGLSurfaceView(context: Context, private val holder: SurfaceHolder?) : GLSurfaceView(context) {
