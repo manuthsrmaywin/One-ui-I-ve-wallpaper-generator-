@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
@@ -40,10 +41,11 @@ class SuperWallpaperService : WallpaperService() {
         return SuperWallpaperEngine()
     }
 
-    inner class SuperWallpaperEngine : Engine(), GLSurfaceView.Renderer {
+    inner class SuperWallpaperEngine : Engine(), GLSurfaceView.Renderer, SharedPreferences.OnSharedPreferenceChangeListener {
 
         private var glSurfaceView: WallpaperGLSurfaceView? = null
         private var keyguardManager: KeyguardManager? = null
+        private var prefs: SharedPreferences? = null
 
         private var isLocked = true
         private var isDarkMode = true
@@ -74,7 +76,6 @@ class SuperWallpaperService : WallpaperService() {
         private lateinit var vertexBuffer: FloatBuffer
         private lateinit var indexBuffer: ShortBuffer
 
-        // Simplified, high-compatibility GLSL 1.00 Shaders
         private val vertexShaderCode = """
             uniform mat4 uMVPMatrix;
             uniform float uTime;
@@ -150,6 +151,11 @@ class SuperWallpaperService : WallpaperService() {
             super.onCreate(surfaceHolder)
             keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
 
+            // Initialize Preferences and Listener for Google Wallpapers Settings
+            prefs = getSharedPreferences("wallpaper_prefs", Context.MODE_PRIVATE)
+            prefs?.registerOnSharedPreferenceChangeListener(this)
+            loadUserPreferences()
+
             isLocked = keyguardManager?.isKeyguardLocked ?: true
             targetZoom = if (isLocked) 5.5f else 4.0f
             currentZoom = targetZoom
@@ -173,6 +179,28 @@ class SuperWallpaperService : WallpaperService() {
                 setRenderer(this@SuperWallpaperEngine)
                 renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
             }
+        }
+
+        private fun loadUserPreferences() {
+            prefs?.let { p ->
+                val speed = p.getFloat("pref_animation_speed", 0.015f)
+                val amplitude = p.getFloat("pref_wave_amplitude", 0.35f)
+                val density = p.getFloat("pref_volumetric_density", 1.2f)
+                val shapeIndex = p.getInt("pref_shape_type", ShapeType.VOLUMETRIC_ORB.ordinal)
+                
+                val shape = ShapeType.values().getOrElse(shapeIndex) { ShapeType.VOLUMETRIC_ORB }
+
+                config = config.copy(
+                    animationSpeed = speed,
+                    waveAmplitude = amplitude,
+                    volumetricDensity = density,
+                    shapeType = shape
+                )
+            }
+        }
+
+        override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
+            loadUserPreferences()
         }
 
         private fun updateThemeState() {
@@ -258,6 +286,7 @@ class SuperWallpaperService : WallpaperService() {
             super.onVisibilityChanged(visible)
             if (visible) {
                 updateThemeState()
+                loadUserPreferences()
                 isLocked = keyguardManager?.isKeyguardLocked ?: true
                 targetZoom = if (isLocked) 5.5f else 4.0f
                 glSurfaceView?.onResume()
@@ -268,6 +297,7 @@ class SuperWallpaperService : WallpaperService() {
 
         override fun onDestroy() {
             super.onDestroy()
+            prefs?.unregisterOnSharedPreferenceChangeListener(this)
             try { unregisterReceiver(userPresentReceiver) } catch (e: Exception) {}
             glSurfaceView?.onDestroy()
         }
