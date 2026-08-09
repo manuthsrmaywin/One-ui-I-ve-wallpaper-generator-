@@ -1,16 +1,1 @@
-<?xml version="1.0" encoding="utf-8"?>
-<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <CheckBoxPreference
-        android:key="pref_enable_glow"
-        android:title="Enable Dynamic Lighting"
-        android:summary="Toggle live lighting effects on/off"
-        android:defaultValue="true" />
-
-    <EditTextPreference
-        android:key="pref_animation_speed"
-        android:title="Animation Speed"
-        android:summary="Set wave animation speed (default: 0.015)"
-        android:defaultValue="0.015" />
-
-</PreferenceScreen>
