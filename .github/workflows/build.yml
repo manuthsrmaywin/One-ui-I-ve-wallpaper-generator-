@@ -2,12 +2,11 @@ name: Build Android Live Wallpaper APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build Debug APK
     runs-on: ubuntu-latest
 
     steps:
@@ -22,10 +21,11 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
 
       - name: Build APK with Gradle
         run: gradle assembleDebug
-
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
