@@ -10,6 +10,7 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.service.wallpaper.WallpaperService
+import android.util.Log
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import java.nio.ByteBuffer
@@ -65,13 +66,15 @@ class SuperWallpaperService : WallpaperService() {
         private val rotationMatrix = FloatArray(16)
 
         private var program = 0
-        private val gridCols = 50
-        private val gridRows = 50
+        private val gridCols = 40
+        private val gridRows = 40
         private var indexCount = 0
+        private var isProgramValid = false
 
         private lateinit var vertexBuffer: FloatBuffer
         private lateinit var indexBuffer: ShortBuffer
 
+        // Simplified, high-compatibility GLSL 1.00 Shaders
         private val vertexShaderCode = """
             uniform mat4 uMVPMatrix;
             uniform float uTime;
@@ -85,18 +88,9 @@ class SuperWallpaperService : WallpaperService() {
 
             void main() {
                 vec3 pos = aPosition;
-                float disp = 0.0;
-                
-                if (uShapeType == 0) { 
-                    disp = sin(pos.x * 2.0 + uTime * 1.5 + uXOffset * 4.0) * uAmplitude +
-                           cos(pos.y * 2.0 + uTime * 1.0) * (uAmplitude * 0.75);
-                    pos.z += disp;
-                } else if (uShapeType == 1 || uShapeType == 2) { 
-                    float angle = atan(pos.y, pos.x);
-                    float dist = length(pos.xy);
-                    disp = sin(dist * 4.0 - uTime * 2.0) * uAmplitude;
-                    pos.z += disp;
-                }
+                float disp = sin(pos.x * 2.0 + uTime * 1.5 + uXOffset * 3.0) * uAmplitude +
+                            cos(pos.y * 2.0 + uTime * 1.0) * (uAmplitude * 0.7);
+                pos.z += disp;
                 
                 vPosition = pos;
                 vDisplacement = disp;
@@ -119,12 +113,8 @@ class SuperWallpaperService : WallpaperService() {
             varying float vDisplacement;
 
             void main() {
-                vec4 color = mix(uPrimaryColor, uSecondaryColor, vDisplacement + 0.5);
-                
-                if (uShapeType == 1) {
-                    float radialGlow = 1.0 - smoothstep(0.0, 2.5 * uDensity, length(vPosition.xy));
-                    color.rgb += uSecondaryColor.rgb * radialGlow * 0.6;
-                }
+                float factor = clamp(vDisplacement + 0.5, 0.0, 1.0);
+                vec4 color = mix(uPrimaryColor, uSecondaryColor, factor);
                 
                 if (uTouchTime > 0.0) {
                     float dist = distance(vPosition.xy, uTouchPos);
@@ -136,9 +126,7 @@ class SuperWallpaperService : WallpaperService() {
                     color.rgb += vec3(0.3, 0.7, 1.0) * ripple * fade;
                 }
 
-                float sheen = pow(clamp(vDisplacement + 0.4, 0.0, 1.0), 3.0) * 0.4;
-                color.rgb += vec3(sheen);
-
+                color.rgb += vec3(pow(factor, 3.0) * 0.3);
                 gl_FragColor = color;
             }
         """.trimIndent()
@@ -172,7 +160,11 @@ class SuperWallpaperService : WallpaperService() {
                 addAction(Intent.ACTION_USER_PRESENT)
                 addAction(Intent.ACTION_SCREEN_OFF)
             }
-            registerReceiver(userPresentReceiver, filter)
+            try {
+                registerReceiver(userPresentReceiver, filter)
+            } catch (e: Exception) {
+                Log.e("SuperWallpaper", "Receiver registration failed", e)
+            }
 
             generateMeshGrid()
 
@@ -287,17 +279,19 @@ class SuperWallpaperService : WallpaperService() {
             val vShader = loadShader(GLES20.GL_VERTEX_SHADER, vertexShaderCode)
             val fShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fragmentShaderCode)
 
-            program = GLES20.glCreateProgram().also {
-                GLES20.glAttachShader(it, vShader)
-                GLES20.glAttachShader(it, fShader)
-                GLES20.glLinkProgram(it)
+            if (vShader != 0 && fShader != 0) {
+                program = GLES20.glCreateProgram().also { p ->
+                    GLES20.glAttachShader(p, vShader)
+                    GLES20.glAttachShader(p, fShader)
+                    GLES20.glLinkProgram(p)
 
-                val linkStatus = IntArray(1)
-                GLES20.glGetProgramiv(it, GLES20.GL_LINK_STATUS, linkStatus, 0)
-                if (linkStatus[0] == 0) {
-                    val info = GLES20.glGetProgramInfoLog(it)
-                    GLES20.glDeleteProgram(it)
-                    throw RuntimeException("Program linking failed: $info")
+                    val linkStatus = IntArray(1)
+                    GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, linkStatus, 0)
+                    if (linkStatus[0] != 0) {
+                        isProgramValid = true
+                    } else {
+                        Log.e("SuperWallpaper", "Program Link Error: " + GLES20.glGetProgramInfoLog(p))
+                    }
                 }
             }
         }
@@ -311,6 +305,11 @@ class SuperWallpaperService : WallpaperService() {
         }
 
         override fun onDrawFrame(gl: GL10?) {
+            setClearColorForTheme()
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+
+            if (!isProgramValid) return
+
             time += config.animationSpeed
 
             if (touchTime > 0.0f) {
@@ -320,10 +319,6 @@ class SuperWallpaperService : WallpaperService() {
 
             currentZoom += (targetZoom - currentZoom) * config.fluidityDamping
             xOffset += (targetOffset - xOffset) * config.fluidityDamping
-
-            setClearColorForTheme()
-            GLES20.glDepthMask(true)
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
 
             GLES20.glUseProgram(program)
 
@@ -335,31 +330,53 @@ class SuperWallpaperService : WallpaperService() {
             Matrix.multiplyMM(mvpMatrix, 0, mvpMatrix, 0, rotationMatrix, 0)
 
             val posHandle = GLES20.glGetAttribLocation(program, "aPosition")
-            if (posHandle != -1) {
+            if (posHandle >= 0) {
                 GLES20.glEnableVertexAttribArray(posHandle)
                 GLES20.glVertexAttribPointer(posHandle, 3, GLES20.GL_FLOAT, false, 12, vertexBuffer)
             }
 
-            GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uTime"), time)
-            GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uXOffset"), xOffset)
-            GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uShapeType"), config.shapeType.ordinal)
-            GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uAmplitude"), config.waveAmplitude)
-            GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uDensity"), config.volumetricDensity)
-            GLES20.glUniform2f(GLES20.glGetUniformLocation(program, "uTouchPos"), touchX, touchY)
-            GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uTouchTime"), touchTime)
-            GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program, "uMVPMatrix"), 1, false, mvpMatrix, 0)
+            setUniform1f("uTime", time)
+            setUniform1f("uXOffset", xOffset)
+            setUniform1i("uShapeType", config.shapeType.ordinal)
+            setUniform1f("uAmplitude", config.waveAmplitude)
+            setUniform1f("uDensity", config.volumetricDensity)
+            setUniform2f("uTouchPos", touchX, touchY)
+            setUniform1f("uTouchTime", touchTime)
+
+            val mvpHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
+            if (mvpHandle >= 0) {
+                GLES20.glUniformMatrix4fv(mvpHandle, 1, false, mvpMatrix, 0)
+            }
 
             val primary = if (isDarkMode) config.primaryColorDark else config.primaryColorLight
             val secondary = if (isDarkMode) config.secondaryColorDark else config.secondaryColorLight
 
-            GLES20.glUniform4fv(GLES20.glGetUniformLocation(program, "uPrimaryColor"), 1, primary, 0)
-            GLES20.glUniform4fv(GLES20.glGetUniformLocation(program, "uSecondaryColor"), 1, secondary, 0)
+            val pHandle = GLES20.glGetUniformLocation(program, "uPrimaryColor")
+            if (pHandle >= 0) GLES20.glUniform4fv(pHandle, 1, primary, 0)
+
+            val sHandle = GLES20.glGetUniformLocation(program, "uSecondaryColor")
+            if (sHandle >= 0) GLES20.glUniform4fv(sHandle, 1, secondary, 0)
 
             GLES20.glDrawElements(GLES20.GL_TRIANGLES, indexCount, GLES20.GL_UNSIGNED_SHORT, indexBuffer)
 
-            if (posHandle != -1) {
+            if (posHandle >= 0) {
                 GLES20.glDisableVertexAttribArray(posHandle)
             }
+        }
+
+        private fun setUniform1f(name: String, value: Float) {
+            val loc = GLES20.glGetUniformLocation(program, name)
+            if (loc >= 0) GLES20.glUniform1f(loc, value)
+        }
+
+        private fun setUniform1i(name: String, value: Int) {
+            val loc = GLES20.glGetUniformLocation(program, name)
+            if (loc >= 0) GLES20.glUniform1i(loc, value)
+        }
+
+        private fun setUniform2f(name: String, x: Float, y: Float) {
+            val loc = GLES20.glGetUniformLocation(program, name)
+            if (loc >= 0) GLES20.glUniform2f(loc, x, y)
         }
 
         private fun setClearColorForTheme() {
@@ -372,15 +389,17 @@ class SuperWallpaperService : WallpaperService() {
 
         private fun loadShader(type: Int, shaderCode: String): Int {
             val shader = GLES20.glCreateShader(type)
+            if (shader == 0) return 0
+
             GLES20.glShaderSource(shader, shaderCode)
             GLES20.glCompileShader(shader)
             
             val compiled = IntArray(1)
             GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compiled, 0)
             if (compiled[0] == 0) {
-                val infoLog = GLES20.glGetShaderInfoLog(shader)
+                Log.e("SuperWallpaper", "Shader Compilation Error ($type): " + GLES20.glGetShaderInfoLog(shader))
                 GLES20.glDeleteShader(shader)
-                throw RuntimeException("Shader compilation failed ($type): $infoLog")
+                return 0
             }
             return shader
         }
